@@ -7,6 +7,8 @@ training-data:
 frontend:
 	uv run streamlit run src/inference_pipeline/frontend/main.py --server.port 8501
 
+kill:
+	kill -9 $(lsof -t -i :8501)
 
 backfill-features: # Backfilling the Feature Store
 	uv run src/inference_pipeline/backend/backfill_feature_store.py --scenarios start end --target features 

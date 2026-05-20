@@ -82,7 +82,6 @@ def retrieve_predictions_for_this_hour(
     Args:
         predicted_starts (pd.DataFrame): the dataframe of of all predicted departures for all stations and hours.
         predicted_ends (pd.DataFrame): the dataframe of of all predicted arrivals for all stations and hours.
-        include_station_names (bool): whether to add a column of station names to the predictions. Defaults to True.
         from_hour (datetime, optional): From which hour we want to fetch predictions. Defaults to the previous hour.
         to_hour (datetime, optional): the hour we want predictions for. Defaults to the current hour.
 
@@ -93,27 +92,29 @@ def retrieve_predictions_for_this_hour(
         pd.DataFrame: dataframes containing predicted arrivals and departures for this, or the previous hour.
     """
     all_predictions_this_hour = []
-    scenario_and_predictions = {"start": predicted_starts, "end": predicted_ends}   
+
+    scenario_and_predictions: dict[str, pd.DataFrame] = {
+        "start": predicted_starts, 
+        "end": predicted_ends
+    }   
 
     for scenario in scenario_and_predictions.keys():
         predictions = scenario_and_predictions[scenario]
 
-        next_hour_ready = False if predictions[predictions[f"{scenario}_hour"] == to_hour].empty else True
+        to_hour_ready = False if predictions[predictions[f"{scenario}_hour"] == to_hour].empty else True
         previous_hour_ready = False if predictions[predictions[f"{scenario}_hour"] == from_hour].empty else True
 
-        if next_hour_ready: 
+        if to_hour_ready: 
             # Save in case the latest prediction is unavailable at a future time
             predictions_for_target_hour: pd.DataFrame = predictions[predictions[f"{scenario}_hour"] == to_hour]
 
-            # "Backing up predictions to POSTGRES"
-            predictions.to_sql(name=f"{scenario}_backup_predictions", con=config.database_public_url, if_exists="replace")
-            
         elif previous_hour_ready:
             predictions_for_target_hour = predictions[predictions[f"{scenario}_hour"] == from_hour]
 
             if scenario == "start":  
                 st.write("Predictions for the current hour are not available yet. Fetching those from an hour ago.")
         else: 
+            st.write("NOT FINDING RECENT PREDICTIONS")
             try:
                 predictions_for_target_hour = retrieve_backup_predictions(table_name=f"{scenario}_backup_predictions")
                 most_recent_hour_in_backup_predictions = predictions_for_target_hour[f"{scenario}_hour"].iloc[-1]
@@ -327,12 +328,10 @@ if __name__ == "__main__":
 
     tracker = ProgressTracker(n_steps=5)
 
-    from_hour = config.current_hour - timedelta(hours=1)
-    to_hour = config.current_hour 
+    from_hour = config.current_hour 
+    to_hour = config.current_hour + timedelta(hours=1)
 
-    next_hour = config.current_hour + timedelta(hours=1)
-
-    _ = st.header(body=f":violet[Predictions for {to_hour.hour}:00 - {next_hour.hour}:00 (UTC)]", divider=True)
+    _ = st.header(body=f":violet[Predictions for {from_hour.hour}:00 - {to_hour.hour}:00 (UTC)]", divider=True)
     _ = st.markdown(
         """
         After a bit of loading, a map of the city and its environs should appear, with points littered all over it.
@@ -350,7 +349,7 @@ if __name__ == "__main__":
 
     st.sidebar.write("✅ Finished gathering all station details")
 
-    with st.spinner(text=f"Fetching all predictions from the offline feature store"):
+    with st.spinner(text=f"Fetching all predictions from the feature store"):
         predicted_starts, predicted_ends = retrieve_predictions(from_hour=from_hour, to_hour=to_hour)
 
         predicted_starts_this_hour, predicted_ends_this_hour = retrieve_predictions_for_this_hour(

@@ -30,7 +30,7 @@ Build a complete end-to-end machine learning system that culminates in a simple 
 - Provides code that allows for interaction with the Hopsorks Feature Store API.
 - Backfills the Hopsworks feature store with time series data and predictions
 - Delivers these predictions through a simple Streamlit frontend.
-- Github actions are used to backfill the feature store with new predictions every hour.
+- Github Actions are used to backfill the feature store with new predictions every hour.
 
 ## Use the App
 A containerised version of the app is available [here](https://melodious-wisdom-production-2431.up.railway.app/).
