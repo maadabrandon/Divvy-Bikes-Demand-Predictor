@@ -5,7 +5,7 @@ This module contains code that:
 - loads model predictions from the Hopsworks feature store.
 - performs inference on features
 """
-from src.feature_pipeline.data_sourcing import load_raw_data
+from streamlit.runtime.caching import cache_data
 import os
 import numpy as np
 import pandas as pd
@@ -21,6 +21,7 @@ from hsfs.feature_group import FeatureGroup
 
 from src.setup.config import config
 from src.setup.paths import ROUNDING_INDEXER, MIXED_INDEXER
+from src.feature_pipeline.data_sourcing import load_raw_data
 from src.feature_pipeline.preprocessing.core import make_training_data
 from src.inference_pipeline.backend.feature_store import setup_feature_group, get_or_create_feature_view
 from src.feature_pipeline.preprocessing.transformations.training_data import transform_ts_into_training_data
@@ -134,61 +135,118 @@ def fetch_predictions_group(scenario: str) -> FeatureGroup:
         )
 
 
-def load_predictions_from_store(
-    scenario: str, 
-    from_hour: datetime, 
-    to_hour: datetime, 
-    aggregate_predictions: bool = False, 
-    aggregation_method: str = "mean"
-    ) -> pd.DataFrame | None:
-    """
-    Load a dataframe containing predictions from their dedicated feature group on the offline feature store.
-    This dataframe will contain predicted values between the specified hours. 
+class PredictionLoader:
+    def __init__(
+        self, 
+        scenario: str, 
+        sql_first: bool,
+    ):
+        """
 
-    Args:
-        model_name: the model's name is part of the name of the feature view to be queried
-        from_hour: the first hour for which we want the predictions
-        to_hour: the last hour for would like to receive predictions.
+        Args:
+            scenario: 
+            sql_first: 
+        """
+        self.scenario: str = scenario
+        self.sql_first: bool = sql_first
+        self.from_hour: datetime = pd.to_datetime(config.current_hour, utc=True)
+        self.to_hour: datetime = pd.to_datetime(config.current_hour + timedelta(hours=1), utc=True)
 
-    Returns:
-        pd.DataFrame: the dataframe containing predictions.
-    """
-    assert aggregation_method.lower() in ["sum", "mean"], 'Please specify "sum" or "mean" as aggregation methhods'
+    def load_and_process_predictions(
+        self,
+        aggregate_predictions: bool = False, 
+        aggregation_method: str = "mean"
+    ) -> pd.DataFrame:
+        """
+        Load a dataframe containing predictions from their dedicated feature group on the offline feature store.
+        This dataframe will contain predicted values between the specified hours. 
 
-    # Ensure these times are datatimes
-    from_hour = pd.to_datetime(from_hour, utc=True)
-    to_hour = pd.to_datetime(to_hour, utc=True)
+        Args:
+            scenario: 
+            aggregate_predictions: 
+            aggregation_method: 
 
-    full_model_name: str|None = retrieve_name_of_best_model_from_previous_run(scenario=scenario)
-    predictions_group = fetch_predictions_group(scenario=scenario)
+        Returns:
+            pd.DataFrame: the dataframe containing predictions.
+        """
+        assert aggregation_method.lower() in ["sum", "mean"], 'Please specify "sum" or "mean" as aggregation methhods'
 
-    predictions_feature_view: FeatureView = get_or_create_feature_view(
-        name=f"{full_model_name}_predictions",
-        feature_group=predictions_group,
-        version=config.feature_view_version
-    )
+        predictions_df = self.get_full_predictions_from_chosen_source()
+        predictions_df[f"{self.scenario}_hour"] = pd.to_datetime(predictions_df[f"{self.scenario}_hour"], utc=True)
 
-    predictions_df = predictions_feature_view.get_batch_data(
-        start_time=from_hour - timedelta(hours=1), 
-        end_time=to_hour + timedelta(hours=1)
-    )
+        predictions_df = predictions_df.drop("timestamp", axis=1)
 
-    predictions_df[f"{scenario}_hour"] = pd.to_datetime(predictions_df[f"{scenario}_hour"], utc=True)
+        predictions_df: pd.DataFrame = predictions_df.sort_values(
+            by=[f"{self.scenario}_hour", f"{self.scenario}_station_id"]
+        )
 
-    predictions_df = predictions_df.drop("timestamp", axis=1)
-
-    predictions_df: pd.DataFrame = predictions_df.sort_values(
-        by=[f"{scenario}_hour", f"{scenario}_station_id"]
-    )
-
-    if aggregate_predictions and aggregation_method.lower() in ["sum", "mean"]:
-        return get_aggregate_predictions(
-                scenario=scenario, 
+        if aggregate_predictions and aggregation_method.lower() in ["sum", "mean"]:
+            return get_aggregate_predictions(
+                scenario=self.scenario, 
                 predictions=predictions_df, 
                 aggregation_method=aggregation_method
-        )
-    elif not aggregate_predictions:
+            )
+        
         return predictions_df.reset_index(drop=True)
+
+
+    def get_full_predictions_from_chosen_source(self) -> pd.DataFrame:
+        if self.sql_first:
+            return retrieve_backup_data(self.scenario) 
+        else:
+            full_model_name: str | None = retrieve_name_of_best_model_from_previous_run(scenario=self.scenario)
+            if full_model_name == None:
+                return retrieve_backup_data(self.scenario)
+
+            hopsworks_predictions_df = self.get_predictions_from_hopsworks(full_model_name=full_model_name)
+
+            if hopsworks_predictions_df.empty:
+                return retrieve_backup_data(self.scenario) 
+            else:
+                evaluated_hopsworks_predictions_df: pd.DataFrame | None = self.evaluate_timing_of_data_from_hopsworks(
+                    predictions=hopsworks_predictions_df
+                )
+
+                if evaluated_hopsworks_predictions_df == None: # when neither the next hour/previous hour's predictions are available
+                    return retrieve_backup_data(self.scenario) 
+
+                return evaluated_hopsworks_predictions_df
+
+
+    def get_predictions_from_hopsworks(self, full_model_name: str) -> pd.DataFrame:
+
+        predictions_group = fetch_predictions_group(scenario=self.scenario)
+
+        predictions_feature_view: FeatureView = get_or_create_feature_view(
+            name=f"{full_model_name}_predictions",
+            feature_group=predictions_group,
+            version=config.feature_view_version
+        )
+
+        return predictions_feature_view.get_batch_data(
+            start_time=self.from_hour, 
+            end_time=self.to_hour
+        )
+
+    @st.cache_data()
+    def evaluate_timing_of_data_from_hopsworks(self, predictions: pd.DataFrame) -> pd.DataFrame | None:
+
+        to_hour_ready = False if predictions[predictions[f"{self.scenario}_hour"] == self.to_hour].empty else True
+        previous_hour_ready = False if predictions[predictions[f"{self.scenario}_hour"] == self.from_hour].empty else True
+
+        if to_hour_ready: 
+            return predictions[predictions[f"{self.scenario}_hour"] == self.to_hour]
+
+        elif previous_hour_ready:
+            if self.scenario == "start":  # This should only be prenented once
+                st.write("Predictions for the current hour are not available yet. Fetching those from an hour ago.")
+
+            return predictions[predictions[f"{self.scenario}_hour"] == self.from_hour]
+
+        else:
+            return None
+
+
 
 
 def get_model_predictions(scenario: str, model: Pipeline, features: pd.DataFrame) -> pd.DataFrame:
@@ -212,6 +270,12 @@ def get_model_predictions(scenario: str, model: Pipeline, features: pd.DataFrame
 
     return prediction_per_station
 
+
+def retrieve_backup_data(scenario: str):
+    return pd.read_sql(
+        sql=f"SELECT * FROM {scenario}_backup_predictions;",
+        con=config.database_public_url
+    )
 
 def get_aggregate_predictions(scenario: str, predictions: pd.DataFrame, aggregation_method: str) -> pd.DataFrame:
 

@@ -15,7 +15,7 @@ from datetime import datetime, timedelta
 from src.setup.config import config 
 from src.inference_pipeline.frontend.data import make_geodataframes
 from src.inference_pipeline.frontend.tracker import ProgressTracker
-from src.inference_pipeline.backend.inference import load_predictions_from_store
+from src.inference_pipeline.backend.inference import PredictionLoader 
 from src.feature_pipeline.preprocessing.station_indexing.mixed_indexer import fetch_json_of_ids_and_names
 
 
@@ -34,13 +34,9 @@ def retrieve_predictions(from_hour: datetime, to_hour: datetime) -> tuple[pd.Dat
     prediction_dataframes: list[pd.DataFrame] = []
     
     for scenario in config.displayed_scenario_names.keys():                
-
+        loader = PredictionLoader(scenario=scenario, sql_first=True)
         try:
-            predictions: pd.DataFrame = load_predictions_from_store(
-                scenario=scenario,
-                from_hour=from_hour, 
-                to_hour=to_hour
-            )
+            predictions: pd.DataFrame = loader.load_and_process_predictions()
 
             # Now to add station names to the received predictions
             ids_and_names = fetch_json_of_ids_and_names(scenario=scenario, using_mixed_indexer=True, invert=False)        
@@ -67,83 +63,6 @@ def retrieve_predictions(from_hour: datetime, to_hour: datetime) -> tuple[pd.Dat
     return start_predictions, end_predictions
 
 
-@st.cache_data()
-def retrieve_predictions_for_this_hour(
-    predicted_starts: pd.DataFrame,
-    predicted_ends: pd.DataFrame,
-    from_hour: datetime,
-    to_hour: datetime
-) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """
-    Initialise an inference object, and load the dataframes of predictions which we already fetched from their 
-    dedicated feature groups. Then fetch the most recent prediction if it is available, or the second most
-    recent (the one from an hour before).
-
-    Args:
-        predicted_starts (pd.DataFrame): the dataframe of of all predicted departures for all stations and hours.
-        predicted_ends (pd.DataFrame): the dataframe of of all predicted arrivals for all stations and hours.
-        from_hour (datetime, optional): From which hour we want to fetch predictions. Defaults to the previous hour.
-        to_hour (datetime, optional): the hour we want predictions for. Defaults to the current hour.
-
-    Raises:
-        Exception: In the event that the predictions for the current hour, or the previous one cannot be obtained.
-                   This exception suggests that the feature pipeline may not be working properly.
-    Returns:
-        pd.DataFrame: dataframes containing predicted arrivals and departures for this, or the previous hour.
-    """
-    all_predictions_this_hour = []
-
-    scenario_and_predictions: dict[str, pd.DataFrame] = {
-        "start": predicted_starts, 
-        "end": predicted_ends
-    }   
-
-    for scenario in scenario_and_predictions.keys():
-        predictions = scenario_and_predictions[scenario]
-
-        to_hour_ready = False if predictions[predictions[f"{scenario}_hour"] == to_hour].empty else True
-        previous_hour_ready = False if predictions[predictions[f"{scenario}_hour"] == from_hour].empty else True
-
-        if to_hour_ready: 
-            # Save in case the latest prediction is unavailable at a future time
-            predictions_for_target_hour: pd.DataFrame = predictions[predictions[f"{scenario}_hour"] == to_hour]
-
-        elif previous_hour_ready:
-            predictions_for_target_hour = predictions[predictions[f"{scenario}_hour"] == from_hour]
-
-            if scenario == "start":  
-                st.write("Predictions for the current hour are not available yet. Fetching those from an hour ago.")
-        else: 
-            st.write("NOT FINDING RECENT PREDICTIONS")
-            try:
-                predictions_for_target_hour = retrieve_backup_predictions(table_name=f"{scenario}_backup_predictions")
-                most_recent_hour_in_backup_predictions = predictions_for_target_hour[f"{scenario}_hour"].iloc[-1]
-
-                if scenario == "start":
-                    st.write(
-                        f":orange[Could not fetch predictions for previous hour. Providing predictions from {most_recent_hour_in_backup_predictions}]"
-                    )
-            except:
-                most_recent_hour_in_received_predictions = predictions[f"{scenario}_hour"].iloc[-1]
-                predictions_for_target_hour = predictions[predictions[f"{scenario}_hour"] == most_recent_hour_in_received_predictions]
-
-                if scenario == "start":
-                    st.write(
-                        f":orange[Unable to fetch predictions for the current or previous hour. Providing predictions from {most_recent_hour_in_received_predictions}]"
-                    )
-
-        # Now to include the names of stations
-        predictions_for_target_hour  = predictions_for_target_hour.drop(f"{scenario}_station_id", axis = 1)
-        predictions_for_target_hour = predictions_for_target_hour.reset_index(drop=True)
-        all_predictions_this_hour.append(predictions_for_target_hour)
-
-    start_predictions, end_predictions = all_predictions_this_hour[0], all_predictions_this_hour[1]
-    return start_predictions, end_predictions
-
-
-
-def retrieve_backup_predictions(table_name: str) -> pd.DataFrame:
-    return pd.read_sql(sql=f'SELECT * FROM {table_name};', con=config.database_public_url)
 
 
 def restrict_geodataframe_to_stations_with_predictions(
@@ -174,6 +93,49 @@ def restrict_geodataframe_to_stations_with_predictions(
     )
 
     return geo_dataframe.loc[predictions_are_present, :]
+
+
+@st.cache_data()
+def retrieve_predictions_for_this_hour(
+    predicted_starts: pd.DataFrame,
+    predicted_ends: pd.DataFrame,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Initialise an inference object, and load the dataframes of predictions which we already fetched from their 
+    dedicated feature groups. Then fetch the most recent prediction if it is available, or the second most
+    recent (the one from an hour before).
+
+    Args:
+        predicted_starts (pd.DataFrame): the dataframe of of all predicted departures for all stations and hours.
+        predicted_ends (pd.DataFrame): the dataframe of of all predicted arrivals for all stations and hours.
+
+    Raises:
+        Exception: In the event that the predictions for the current hour, or the previous one cannot be obtained.
+                   This exception suggests that the feature pipeline may not be working properly.
+    Returns:
+        pd.DataFrame: dataframes containing predicted arrivals and departures for this, or the previous hour.
+    """
+    all_predictions_this_hour = []
+
+    scenario_and_predictions: dict[str, pd.DataFrame] = {
+        "start": predicted_starts, 
+        "end": predicted_ends
+    }   
+
+    for scenario in scenario_and_predictions.keys():
+        predictions = scenario_and_predictions[scenario]
+
+        most_recent_hour_in_received_predictions = predictions[f"{scenario}_hour"].iloc[-1]
+        predictions_for_target_hour = predictions[predictions[f"{scenario}_hour"] == most_recent_hour_in_received_predictions]
+                
+        predictions_for_target_hour  = predictions_for_target_hour.drop(f"{scenario}_station_id", axis = 1)
+        predictions_for_target_hour = predictions_for_target_hour.reset_index(drop=True)
+        all_predictions_this_hour.append(predictions_for_target_hour)
+
+    start_predictions, end_predictions = all_predictions_this_hour[0], all_predictions_this_hour[1]
+    return start_predictions, end_predictions
+
+
 
 
 def merge_geodataframe_and_predictions_per_scenario(scenario: str, geodataframe: pd.DataFrame, predictions: pd.DataFrame):
@@ -354,9 +316,7 @@ if __name__ == "__main__":
 
         predicted_starts_this_hour, predicted_ends_this_hour = retrieve_predictions_for_this_hour(
             predicted_starts=predicted_starts,
-            predicted_ends=predicted_ends,
-            from_hour=from_hour,
-            to_hour=to_hour
+            predicted_ends=predicted_ends
         )
 
         tracker.next()

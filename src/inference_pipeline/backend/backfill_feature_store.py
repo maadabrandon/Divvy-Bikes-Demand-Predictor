@@ -107,13 +107,17 @@ def backfill_predictions(scenario: str, target_date: datetime) -> None:
             version=config.feature_group_version
         )
 
-        predictions_feature_group.insert(write_options={"wait_for_job": True}, features=predictions)
-
         # "Backing up predictions to POSTGRES"
         predictions.to_sql(
             name=f"{scenario}_backup_predictions", 
             con=config.database_public_url, 
             if_exists="replace"
+        )
+
+        # Push predictions to hopsworks
+        predictions_feature_group.insert(
+            write_options={"wait_for_job": True}, 
+            features=predictions
         )
 
     else:
