@@ -58,7 +58,11 @@ def get_feature_group_for_time_series(scenario: str, primary_key: list[str]) -> 
 
 
 
-def backfill_predictions(scenario: str, target_date: datetime) -> None: 
+def backfill_predictions(
+        scenario: str, 
+        target_date: datetime,
+        include_hopsworks: bool = False 
+    ) -> None: 
     """
     Fetch the registered version of the named model, and download it. Then load a batch of ts_data
     from the relevant feature group (whether for arrival or departure data), and make predictions on those 
@@ -100,24 +104,26 @@ def backfill_predictions(scenario: str, target_date: datetime) -> None:
         predictions: pd.DataFrame = get_model_predictions(scenario=scenario, model=model, features=features)
         predictions = predictions.drop_duplicates().reset_index(drop=True)
 
-        predictions_feature_group = setup_feature_group(
-            primary_key=primary_key,
-            description=f"predicting {config.displayed_scenario_names[scenario]} - {tuned_string} {full_model_name}",
-            name=f"{full_model_name}_predictions",
-            version=config.feature_group_version
-        )
+        if include_hopsworks:
+
+            predictions_feature_group = setup_feature_group(
+                primary_key=primary_key,
+                description=f"predicting {config.displayed_scenario_names[scenario]} - {tuned_string} {full_model_name}",
+                name=f"{full_model_name}_predictions",
+                version=config.feature_group_version
+            )
+
+            # Push predictions to hopsworks
+            predictions_feature_group.insert(
+                write_options={"wait_for_job": True}, 
+                features=predictions
+            )
 
         # "Backing up predictions to POSTGRES"
         predictions.to_sql(
             name=f"{scenario}_backup_predictions", 
             con=config.database_public_url, 
             if_exists="replace"
-        )
-
-        # Push predictions to hopsworks
-        predictions_feature_group.insert(
-            write_options={"wait_for_job": True}, 
-            features=predictions
         )
 
     else:

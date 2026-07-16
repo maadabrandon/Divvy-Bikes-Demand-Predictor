@@ -7,6 +7,7 @@ from lightgbm import LGBMRegressor
 from sklearn.pipeline import Pipeline
 from sklearn.linear_model import Lasso
 
+from src.setup.config import models_and_names 
 from src.setup.paths import COMET_SAVE_DIR, MODELS_DIR, make_fundamental_paths
 
 
@@ -18,13 +19,8 @@ def get_model(model_name: str) -> Lasso | LGBMRegressor | XGBRegressor:
                           'xgboost' for XGBRegressor, 'lightgbm' for LGBMRegressor, and 'lasso' for Lasso.
 
     Returns:
-        Lasso|XGBRegressor|LGBMRegressor: the requested model
+        Lasso|LGBMRegressor|XGBRegressor: the requested model
     """
-    models_and_names = {
-        "lasso": Lasso,
-        "lightgbm": LGBMRegressor,
-        "xgboost": XGBRegressor,
-    }
 
     if model_name.lower() in models_and_names.keys():
         return models_and_names[model_name.lower()]

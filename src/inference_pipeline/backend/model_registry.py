@@ -38,10 +38,10 @@ def push_model(full_model_name: str, status: str, version: str) -> None:
 
     try:
         _ = experiment.register_model(
-            model_name=full_model_name, 
-            status=status, 
-            version=version,
-            sync=True
+                model_name=full_model_name, 
+                status=status, 
+                version=version,
+                sync=True
         )
     except:
         logger.error(f"Failed to register {full_model_name} on Comet")

@@ -13,7 +13,7 @@ from xgboost import XGBRegressor
 from sklearn.metrics import mean_absolute_error
 from sklearn.pipeline import Pipeline, make_pipeline
 
-from src.setup.config import config
+from src.setup.config import config, models_and_names 
 from src.feature_pipeline.data_sourcing import load_raw_data
 from src.feature_pipeline.preprocessing.core import make_training_data
 
@@ -153,14 +153,10 @@ def save_model_locally(model_fn: Pipeline, model_name: str):
     logger.info(f"Saved {model_name} to disk")
 
 
-def train_all_models(tuning_trials: int = config.tuning_trials):
-    """
-    Train the named models, identify the best performer (on the test data) and
-    register it to the CometML model registry.
+if __name__ == "__main__":
 
-    Args:
-        tuning_trials: the number of tuning trials 
-    """
+    # Train the named models, identify the best performer (on the test data) and
+    #register it to the CometML model registry.
     make_fundamental_paths()  # Ensure that all the necessary directories exist.
     delete_prior_project_from_comet() 
     delete_local_saves()
@@ -170,16 +166,25 @@ def train_all_models(tuning_trials: int = config.tuning_trials):
         delete_best_model_from_previous_run(scenario=scenario)
 
         for tune_or_not in [False, True]:
-            for base_name in config.model_base_names:
-                error = train(scenario=scenario, base_name=base_name, tune=tune_or_not, tuning_trials=tuning_trials)
+            for base_name in models_and_names.keys():
+                error = train(
+                    scenario=scenario, 
+                    base_name=base_name, 
+                    tune=tune_or_not, 
+                    tuning_trials=config.tuning_trials
+                )
+
+
                 tuning_indicator: str = "untuned" if not tune_or_not else "tuned"
                 models_and_errors[ (base_name, tuning_indicator) ] = error
 
         best_model_name: str = identify_best_model(scenario=scenario, models_and_errors=models_and_errors)
-        logger.info(f"The best performing model for {scenario}s is {best_model_name} -> Pushing it to the CometML model registry")
+
+        logger.info(
+            f"{best_model_name} performs best for {scenario}s -> Pushing it to the CometML model registry"
+        )
+
         push_model(full_model_name=best_model_name, status="Production", version="1.0.0")
 
 
-if __name__ == "__main__":
-    train_all_models()
 

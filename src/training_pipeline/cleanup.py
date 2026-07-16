@@ -15,7 +15,7 @@ from src.training_pipeline.models import get_full_model_name
 def delete_prior_project_from_comet(delete_experiments: bool = True):
     try:
         api = API(api_key=config.comet_api_key)
-        logger.info("Deleting COMET project...")
+        print("Deleting COMET project...")
 
         _ = api.delete_project(
             workspace=config.comet_workspace, 

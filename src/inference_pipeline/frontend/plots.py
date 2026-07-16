@@ -140,9 +140,6 @@ if __name__ != "__main__":
         
         for scenario in config.displayed_scenario_names.keys():
             
-            # print(f"{scenario}_hour" in scenarios_and_features[scenario].columns)
-            # breakpoint()
-        
             row_indices = np.argsort(geographical_features_and_predictions[f"predicted_{scenario}s"].values)[::-1]
         
             for row_id in row_indices[:10]:

@@ -3,11 +3,22 @@ from dotenv import load_dotenv
 from datetime import datetime, UTC
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from xgboost import XGBRegressor
+from lightgbm import LGBMRegressor
+from sklearn.linear_model import Lasso
+
 from src.setup.paths import PARENT_DIR
 
 
 env_file_path = PARENT_DIR.joinpath(".env") 
 _ = load_dotenv(env_file_path) 
+
+
+models_and_names = {
+    "lightgbm": LGBMRegressor,
+    "lasso": Lasso,
+    "xgboost": XGBRegressor,
+}
 
 
 class GeneralConfig(BaseSettings):
@@ -28,9 +39,8 @@ class GeneralConfig(BaseSettings):
     # Hopsworks
     backfill_days: int = 210 
     feature_group_version: int = 1
-    feature_view_version: int = 1
+    feature_view_version: int = 1 
 
-    model_base_names: list[str] = ["lasso", "lightgbm", "xgboost"]
     current_hour: datetime = pd.to_datetime(datetime.now(tz=UTC)).floor("h")
     displayed_scenario_names: dict[str, str] = {"start": "Departures", "end": "Arrivals"} 
 
