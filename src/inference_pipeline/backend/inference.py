@@ -247,8 +247,6 @@ class PredictionLoader:
             return None
 
 
-
-
 def get_model_predictions(scenario: str, model: Pipeline, features: pd.DataFrame) -> pd.DataFrame:
     """
     Simply use the model's predict method to provide predictions based on the supplied features
